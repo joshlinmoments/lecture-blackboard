@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="雙螢幕簡報黑板：PDF/圖片播放、影片掛頁、隨手打字投大螢幕並自動英譯。">
+<style>:root{padding-top:env(safe-area-inset-top,0);padding-bottom:env(safe-area-inset-bottom,0)}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>簡報黑板播放台</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Roboto+Condensed:wght@400;500;700&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+/* Layout: dark presenter console (controller) + clean full-bleed projection; single deliberate dark world.
+   Type: Roboto Condensed (display/英數) + Noto Sans TC (中文/body). Accent: bright yellow + electric blue. */
+:root{
+  --bg:#0C0D10; --panel:#15171C; --panel2:#1E2129; --panel3:#262A33;
+  --fg:#F2F3F5; --muted:#99A0AC; --faint:#6A7180; --line:#2A2F3A;
+  --accent:#FFE000; --accent2:#2E8BFF; --hot:#FF3B30; --ok:#2FD16B; --chalk:#B6F2C9;
+  --r:14px; color-scheme:dark;
+  --cn:"Noto Sans TC",system-ui,sans-serif;
+  --en:"Roboto Condensed","Noto Sans TC",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--cn);-webkit-font-smoothing:antialiased;overflow:hidden}
+button{font-family:var(--en);cursor:pointer;color:var(--fg);border:none;background:none}
+.hidden{display:none!important}
+::selection{background:var(--accent);color:#000}
+
+/* ---------- LOBBY ---------- */
+#lobby{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:max(24px,env(safe-area-inset-left)) max(16px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
+  background:radial-gradient(130% 90% at 50% -10%,#1a1d26 0%,var(--bg) 60%);overflow:auto}
+.lobby-badge{font-family:var(--en);letter-spacing:.32em;font-size:12px;color:var(--accent);font-weight:700;text-transform:uppercase}
+.lobby-title{font-family:var(--cn);font-weight:900;font-size:clamp(30px,7vw,52px);margin:.25em 0 .1em;letter-spacing:.01em;text-wrap:balance;text-align:center}
+.lobby-sub{color:var(--muted);font-size:15px;max-width:40ch;text-align:center;line-height:1.7;margin-bottom:28px}
+.lobby-sub b{color:var(--fg)}
+.role-grid{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;width:100%;max-width:640px}
+.role-card{flex:1 1 240px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:26px 22px;text-align:left;transition:.15s;display:flex;flex-direction:column;gap:10px}
+.role-card:hover{border-color:var(--accent);transform:translateY(-3px)}
+.role-card .ic{font-size:30px}
+.role-card h3{margin:0;font-family:var(--cn);font-weight:900;font-size:21px}
+.role-card p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.6}
+.role-card.proj:hover{border-color:var(--accent2)}
+.role-tag{font-family:var(--en);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:700}
+.lobby-steps{margin-top:30px;max-width:560px;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.lobby-steps ol{margin:0;padding-left:1.2em;color:var(--muted);font-size:13px;line-height:1.95}
+.lobby-steps ol b{color:var(--fg)}
+.lobby-steps .h{font-family:var(--en);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);font-weight:700;margin-bottom:8px}
+
+/* ---------- shared screens ---------- */
+#controller,#projection{position:fixed;inset:0}
+
+/* ---------- CONTROLLER ---------- */
+#controller{display:flex;flex-direction:column;
+  padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+.topbar{display:flex;align-items:center;gap:12px;padding:10px max(16px,env(safe-area-inset-right)) 10px max(16px,env(safe-area-inset-left));
+  border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+.brand{font-family:var(--cn);font-weight:900;font-size:16px;display:flex;align-items:center;gap:8px}
+.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent)}
+.spacer{flex:1}
+.pill{display:inline-flex;align-items:center;gap:7px;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-family:var(--en);font-size:12.5px;font-weight:500;color:var(--muted)}
+.pill .led{width:8px;height:8px;border-radius:50%;background:var(--faint);box-shadow:0 0 0 0 transparent;transition:.3s}
+.pill.live .led{background:var(--ok);box-shadow:0 0 10px 1px var(--ok)}
+.pill b{color:var(--fg);font-weight:700}
+.clock{font-family:var(--en);font-variant-numeric:tabular-nums;font-weight:700;font-size:15px;color:var(--fg)}
+.tbtn{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:13px;font-weight:500;display:inline-flex;align-items:center;gap:6px;transition:.12s}
+.tbtn:hover{border-color:var(--accent2);background:var(--panel3)}
+.tbtn.warn:hover{border-color:var(--hot)}
+
+.stage{flex:1;display:grid;grid-template-columns:1fr 330px;gap:14px;padding:14px max(16px,env(safe-area-inset-right)) 14px max(16px,env(safe-area-inset-left));min-height:0}
+@media(max-width:860px){.stage{grid-template-columns:1fr;grid-template-rows:1fr auto;overflow:auto}}
+
+/* current preview */
+.preview-wrap{min-width:0;min-height:0;display:flex;flex-direction:column;gap:10px}
+.preview{flex:1;min-height:0;background:#000;border:1px solid var(--line);border-radius:var(--r);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.preview img{max-width:100%;max-height:100%;object-fit:contain}
+.preview .ph{color:var(--faint);font-size:14px;text-align:center;padding:20px;line-height:1.7}
+.preview .scrim{position:absolute;inset:0;pointer-events:none;background:linear-gradient(0deg,rgba(0,0,0,.72) 0%,rgba(0,0,0,.25) 34%,transparent 60%)}
+.preview .wbp{position:absolute;left:0;right:0;bottom:7%;padding:0 6%;text-align:center;pointer-events:none}
+.preview .wbp .zh{font-family:var(--cn);font-weight:900;color:#fff;font-size:clamp(18px,3.2vw,30px);line-height:1.25;text-wrap:balance;text-shadow:0 2px 14px rgba(0,0,0,.7);white-space:pre-wrap}
+.preview .wbp .en{font-family:var(--en);font-weight:500;color:var(--chalk);font-size:clamp(12px,1.7vw,17px);margin-top:.5em;line-height:1.3;text-wrap:balance;white-space:pre-wrap}
+.preview .vtag{position:absolute;left:10px;top:10px;background:var(--accent2);color:#fff;font-family:var(--en);font-weight:700;font-size:11px;letter-spacing:.08em;padding:3px 9px;border-radius:7px;display:flex;align-items:center;gap:5px}
+.scr-black{position:absolute;inset:0;background:#000}
+.scr-white{position:absolute;inset:0;background:#fff}
+
+.transport{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.nav{display:flex;align-items:center;gap:8px}
+.nbtn{width:46px;height:46px;border-radius:12px;background:var(--panel2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:20px;transition:.12s}
+.nbtn:hover{background:var(--accent);color:#000;border-color:var(--accent)}
+.nbtn:disabled{opacity:.35;cursor:default;background:var(--panel2);color:var(--fg);border-color:var(--line)}
+.counter{font-family:var(--en);font-weight:700;font-size:15px;color:var(--fg);font-variant-numeric:tabular-nums;min-width:74px;text-align:center}
+.counter small{color:var(--faint);font-weight:500}
+.seg{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{padding:9px 13px;font-size:12.5px;font-weight:600;color:var(--muted);border-right:1px solid var(--line)}
+.seg button:last-child{border-right:none}
+.seg button.on{background:var(--accent);color:#000}
+.seg button.on.blk{background:#000;color:#fff}
+.seg button.on.wht{background:#fff;color:#000}
+
+/* video control bar (controller) */
+.vidbar{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--accent2);border-radius:12px;padding:8px 12px;flex-wrap:wrap}
+.vidbar .vlabel{font-family:var(--en);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent2);font-weight:700;display:flex;align-items:center;gap:6px}
+.vidbar .vname{font-size:12.5px;color:var(--muted);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--cn)}
+.vbtn{width:42px;height:42px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:17px;transition:.12s}
+.vbtn:hover{border-color:var(--accent2)}
+.vbtn.play{background:var(--accent2);border-color:var(--accent2);color:#fff}
+.vseek{flex:1;min-width:120px;accent-color:var(--accent2);height:4px}
+.vtime{font-family:var(--en);font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:92px;text-align:right}
+.vbtn.rm{font-size:14px}.vbtn.rm:hover{border-color:var(--hot);color:var(--hot)}
+
+/* side column */
+.side{display:flex;flex-direction:column;gap:12px;min-height:0;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px}
+.card .ct{font-family:var(--en);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:700;margin-bottom:9px;display:flex;align-items:center;gap:7px}
+.upcard{display:flex;flex-direction:column;gap:8px}
+.uprow{display:flex;gap:8px;flex-wrap:wrap}
+.upbtn{flex:1 1 auto;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px;font-weight:600;font-family:var(--cn);display:inline-flex;align-items:center;justify-content:center;gap:7px;transition:.12s;min-width:0}
+.upbtn:hover{border-color:var(--accent);background:var(--panel3)}
+.upbtn.vid:hover{border-color:var(--accent2)}
+.upbtn.full{flex-basis:100%}
+.uphint{font-size:11.5px;color:var(--faint);line-height:1.6}
+.uphint b{color:var(--accent)}
+.next-img{width:100%;aspect-ratio:16/9;background:#000;border-radius:9px;object-fit:contain;border:1px solid var(--line)}
+.next-none{width:100%;aspect-ratio:16/9;background:var(--panel2);border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:12.5px;border:1px solid var(--line)}
+.thumbs{flex:1;min-height:60px;overflow-y:auto;display:grid;grid-template-columns:repeat(2,1fr);gap:8px;align-content:start}
+.thumb{position:relative;aspect-ratio:16/9;border-radius:8px;overflow:hidden;border:2px solid transparent;background:#000;cursor:pointer}
+.thumb img{width:100%;height:100%;object-fit:contain}
+.thumb.cur{border-color:var(--accent)}
+.thumb .n{position:absolute;left:4px;top:3px;font-family:var(--en);font-size:10px;font-weight:700;background:rgba(0,0,0,.6);padding:1px 5px;border-radius:5px;color:#fff}
+.thumb .vmark{position:absolute;right:3px;bottom:3px;font-size:11px;background:var(--accent2);border-radius:5px;padding:0 4px;line-height:1.5}
+
+/* upload (empty state) */
+.drop{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;border:2px dashed var(--line);border-radius:var(--r);padding:30px;text-align:center;transition:.15s;background:var(--panel)}
+.drop.over{border-color:var(--accent);background:#17191f}
+.drop .big{font-size:40px}
+.drop h3{margin:0;font-family:var(--cn);font-weight:900;font-size:20px}
+.drop p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.7;max-width:42ch}
+.drop .ff{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:4px}
+.btn-pri{background:var(--accent);color:#000;border-radius:11px;padding:11px 20px;font-weight:700;font-size:14px;font-family:var(--en)}
+.btn-pri:hover{filter:brightness(1.08)}
+.btn-gho{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:11px 18px;font-weight:600;font-size:13.5px}
+.drop .hint{font-size:12px;color:var(--faint);line-height:1.6;max-width:44ch}
+.drop .hint b{color:var(--accent)}
+
+/* loading bar */
+.loading{position:fixed;inset:0;background:rgba(10,11,14,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;z-index:60}
+.loading .lt{font-family:var(--cn);font-weight:700;font-size:17px}
+.bar{width:min(320px,70vw);height:7px;border-radius:999px;background:var(--panel3);overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .2s}
+.loading .ls{font-family:var(--en);color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+
+/* ---------- PEN FAB + blackboard dock ---------- */
+.fab{position:fixed;right:max(20px,env(safe-area-inset-right));bottom:max(20px,env(safe-area-inset-bottom));
+  width:62px;height:62px;border-radius:50%;background:var(--accent);color:#000;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 8px 28px rgba(0,0,0,.5),0 0 0 0 var(--accent);z-index:40;transition:.18s;font-size:26px}
+.fab:hover{transform:scale(1.06)}
+.fab.active{background:var(--accent2);color:#fff}
+.fab .ring{position:absolute;inset:-5px;border-radius:50%;border:2px solid var(--accent);opacity:0}
+.fab.pushing .ring{animation:pr 1.4s ease-out infinite;opacity:1}
+@keyframes pr{0%{transform:scale(1);opacity:.7}100%{transform:scale(1.35);opacity:0}}
+
+.dock{position:fixed;left:0;right:0;bottom:0;z-index:45;background:var(--panel);border-top:1px solid var(--line);
+  border-radius:20px 20px 0 0;box-shadow:0 -14px 40px rgba(0,0,0,.5);
+  padding:14px max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
+  transform:translateY(110%);transition:transform .26s cubic-bezier(.22,1,.36,1);max-height:72vh;overflow:auto}
+.dock.open{transform:translateY(0)}
+.dock-grip{width:42px;height:4px;border-radius:999px;background:var(--line);margin:0 auto 12px}
+.dock-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.dock-head .t{font-family:var(--cn);font-weight:900;font-size:16px;display:flex;align-items:center;gap:8px}
+.dock-head .t .pen{color:var(--accent)}
+.switch{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);font-family:var(--cn);user-select:none;cursor:pointer;font-weight:500}
+.switch input{display:none}
+.track{width:38px;height:22px;border-radius:999px;background:var(--panel3);border:1px solid var(--line);position:relative;transition:.15s;flex:none}
+.track::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--faint);transition:.15s}
+.switch input:checked+.track{background:var(--accent2);border-color:var(--accent2)}
+.switch input:checked+.track::after{left:18px;background:#fff}
+.wb-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:680px){.wb-fields{grid-template-columns:1fr}}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.field label{font-family:var(--en);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:700;display:flex;align-items:center;gap:8px}
+.field label .st{font-family:var(--cn);letter-spacing:0;text-transform:none;color:var(--accent2);font-weight:500;font-size:11.5px}
+textarea{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:11px;color:var(--fg);
+  padding:11px 13px;font-size:16px;line-height:1.5;resize:vertical;min-height:70px;font-family:inherit}
+textarea:focus{outline:none;border-color:var(--accent2)}
+textarea.zh{font-family:var(--cn);font-weight:700;font-size:18px}
+textarea.en{font-family:var(--en);color:var(--chalk)}
+.dock-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px;align-items:center}
+.dock-actions .flexsp{flex:1}
+.wbtn{border-radius:11px;padding:10px 16px;font-weight:700;font-size:13.5px;font-family:var(--cn);display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--panel2)}
+.wbtn:hover{border-color:var(--accent2);background:var(--panel3)}
+.wbtn.pri{background:var(--accent);color:#000;border-color:var(--accent)}
+.wbtn.pri.on{background:var(--hot);color:#fff;border-color:var(--hot)}
+.wbtn.sm{padding:8px 12px;font-size:12.5px;color:var(--muted)}
+
+/* ---------- PROJECTION ---------- */
+#projection{background:#000;display:flex;align-items:center;justify-content:center;cursor:default}
+#projection.hidecur{cursor:none}
+.pslide{max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain;display:block}
+.pvid{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:3}
+.pwait{color:#5b616e;text-align:center;font-family:var(--cn);padding:30px}
+.pwait .ic{font-size:46px;margin-bottom:14px;opacity:.7}
+.pwait h2{font-weight:900;font-size:22px;margin:0 0 6px;color:#7d8491}
+.pwait p{margin:0;font-size:14px;color:#565c69;line-height:1.7}
+.pwait .en{font-family:var(--en);letter-spacing:.04em;margin-top:4px}
+.p-black{position:fixed;inset:0;background:#000;z-index:5}
+.p-white{position:fixed;inset:0;background:#fff;z-index:5}
+.p-wb{position:fixed;left:0;right:0;bottom:0;z-index:8;pointer-events:none;
+  padding:0 clamp(28px,7vw,120px) clamp(40px,9vh,120px);
+  background:linear-gradient(0deg,rgba(0,0,0,.82) 0%,rgba(0,0,0,.5) 42%,transparent 100%);
+  padding-top:clamp(60px,14vh,180px);text-align:center}
+.p-wb.center{top:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,.52);padding-bottom:clamp(40px,9vh,120px)}
+.p-wb .zh{font-family:var(--cn);font-weight:900;color:#fff;line-height:1.22;text-wrap:balance;
+  font-size:clamp(34px,5.6vw,82px);text-shadow:0 3px 26px rgba(0,0,0,.6);white-space:pre-wrap;letter-spacing:.01em}
+.p-wb .en{font-family:var(--en);font-weight:500;color:var(--chalk);line-height:1.3;text-wrap:balance;
+  font-size:clamp(18px,2.6vw,38px);margin-top:.55em;white-space:pre-wrap;letter-spacing:.01em}
+.p-pager{position:fixed;right:max(18px,env(safe-area-inset-right));bottom:max(16px,env(safe-area-inset-bottom));z-index:9;
+  font-family:var(--en);font-weight:700;font-size:15px;color:rgba(255,255,255,.55);background:rgba(0,0,0,.35);
+  padding:5px 12px;border-radius:999px;font-variant-numeric:tabular-nums;opacity:0;transition:opacity .4s}
+#projection:hover .p-pager{opacity:1}
+.pfs{position:fixed;left:max(18px,env(safe-area-inset-left));bottom:max(16px,env(safe-area-inset-bottom));z-index:9;
+  background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:8px 13px;
+  font-family:var(--cn);font-weight:600;font-size:13px;color:#fff;opacity:0;transition:.3s;display:flex;gap:7px;align-items:center}
+#projection:hover .pfs{opacity:1}
+.punlock{position:fixed;left:50%;bottom:max(70px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:10;
+  background:var(--accent2);color:#fff;font-family:var(--cn);font-weight:700;font-size:15px;padding:11px 20px;border-radius:999px;
+  box-shadow:0 8px 24px rgba(0,0,0,.5);cursor:pointer;animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{transform:translateX(-50%) scale(1)}50%{transform:translateX(-50%) scale(1.04)}}
+.toast{position:fixed;left:50%;top:18px;transform:translateX(-50%) translateY(-24px);z-index:70;background:var(--panel3);
+  border:1px solid var(--line);border-radius:999px;padding:9px 18px;font-size:13px;font-weight:600;color:var(--fg);
+  opacity:0;transition:.25s;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+
+<!-- ============ LOBBY ============ -->
+<div id="lobby">
+  <div class="lobby-badge">Presenter · Blackboard</div>
+  <div class="lobby-title">簡報黑板播放台</div>
+  <div class="lobby-sub">雙螢幕簡報系統。播放中按右下角的筆，<b>隨手打字就投到大螢幕</b>，下方自動配上英文翻譯；簡報裡的影片也能掛頁播放。<br>先選這個視窗要當什麼：</div>
+  <div class="role-grid">
+    <button class="role-card" id="pickCtrl">
+      <div class="ic">🎛️</div>
+      <div class="role-tag">Your laptop</div>
+      <h3>控制台</h3>
+      <p>你操作的畫面：上傳簡報與影片、翻頁、打黑板。放在你看得到的螢幕（筆電本機）。</p>
+    </button>
+    <button class="role-card proj" id="pickProj">
+      <div class="ic">📺</div>
+      <div class="role-tag">Projector / 大螢幕</div>
+      <h3>投影畫面</h3>
+      <p>給觀眾看的畫面：只顯示簡報、影片與黑板字。把這個視窗拖到投影機、按全螢幕。</p>
+    </button>
+  </div>
+  <div class="lobby-steps">
+    <div class="h">怎麼用（同一台電腦接投影機）</div>
+    <ol>
+      <li>在<b>這個連結</b>開兩個瀏覽器視窗。</li>
+      <li>一個選「<b>控制台</b>」留在筆電；另一個選「<b>投影畫面</b>」拖到投影機、按全螢幕。</li>
+      <li>在控制台<b>上傳簡報</b>（PDF 或圖片）；有影片的那幾頁再<b>掛上影片檔</b>。</li>
+      <li>講到一半要補充：按右下角的<b>筆</b>，打字即時投到大螢幕。</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ============ CONTROLLER ============ -->
+<div id="controller" class="hidden">
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span>控制台</div>
+    <div class="pill" id="connPill"><span class="led"></span><span id="connTxt">投影未連線</span></div>
+    <div class="spacer"></div>
+    <div class="clock" id="clock">--:--</div>
+    <button class="tbtn warn" id="ctrlReset">離開</button>
+  </div>
+
+  <div class="stage" id="ctrlStage">
+    <!-- upload state -->
+    <div class="drop" id="drop">
+      <div class="big">📂</div>
+      <h3>上傳這次的簡報</h3>
+      <p>把簡報檔拖進來，或點下面選檔。兩邊畫面會自動同步。</p>
+      <div class="ff">
+        <button class="btn-pri" id="pickPdf">選 PDF 檔</button>
+        <button class="btn-gho" id="pickImgs">選圖片（多張）</button>
+      </div>
+      <div class="hint">靜態投影片用 <b>PDF</b>（保真度最高）或 <b>PNG / JPG</b>。<br>PowerPoint / Keynote 請用「另存為 PDF」再上傳；<b>影片</b>之後掛到對應頁即可。</div>
+    </div>
+
+    <!-- playing state -->
+    <div class="preview-wrap hidden" id="previewWrap">
+      <div class="preview" id="preview">
+        <img id="curImg" alt="目前投影片">
+        <div class="scr-black hidden" id="curBlack"></div>
+        <div class="scr-white hidden" id="curWhite"></div>
+        <div class="vtag hidden" id="curVtag">🎬 這頁有影片</div>
+        <div class="scrim hidden" id="curScrim"></div>
+        <div class="wbp hidden" id="curWb"><div class="zh" id="curWbZh"></div><div class="en" id="curWbEn"></div></div>
+      </div>
+      <div class="transport">
+        <div class="nav">
+          <button class="nbtn" id="prevBtn" title="上一頁 (←)">‹</button>
+          <div class="counter"><span id="curNo">0</span> <small>/ <span id="totNo">0</span></small></div>
+          <button class="nbtn" id="nextBtn" title="下一頁 (→)">›</button>
+        </div>
+        <div class="seg" id="screenSeg">
+          <button data-s="slide" class="on">簡報</button>
+          <button data-s="black" class="blk">黑幕</button>
+          <button data-s="white" class="wht">白幕</button>
+        </div>
+        <div class="spacer"></div>
+      </div>
+      <!-- video control bar -->
+      <div class="vidbar hidden" id="vidbar">
+        <span class="vlabel">🎬 影片</span>
+        <span class="vname" id="vName">—</span>
+        <button class="vbtn play" id="vPlay" title="播放/暫停">▶</button>
+        <button class="vbtn" id="vRestart" title="從頭">↺</button>
+        <input type="range" class="vseek" id="vSeek" min="0" max="1000" value="0">
+        <span class="vtime" id="vTime">0:00 / 0:00</span>
+        <button class="vbtn rm" id="vRemove" title="移除這頁的影片">🗑</button>
+      </div>
+    </div>
+
+    <!-- side -->
+    <div class="side hidden" id="side">
+      <div class="card upcard">
+        <div class="ct">上傳檔案 · Upload</div>
+        <div class="uprow">
+          <button class="upbtn" id="upPdf">📄 PDF</button>
+          <button class="upbtn" id="upImgs">🖼 圖片</button>
+        </div>
+        <button class="upbtn vid full" id="upVid">🎬 這頁加影片</button>
+        <div class="uphint">上傳新 PDF/圖片會<b>換掉</b>目前簡報。影片會掛到<b>目前這一頁</b>。</div>
+      </div>
+      <div class="card">
+        <div class="ct">下一頁 · Next</div>
+        <img class="next-img hidden" id="nextImg" alt="下一頁">
+        <div class="next-none" id="nextNone">已是最後一頁</div>
+      </div>
+      <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column">
+        <div class="ct">全部投影片 · <span id="thumbCount">0</span></div>
+        <div class="thumbs" id="thumbs"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- hidden file inputs (shared) -->
+  <input type="file" id="filePdf" accept="application/pdf,.pdf" class="hidden">
+  <input type="file" id="fileImgs" accept="image/*" multiple class="hidden">
+  <input type="file" id="fileVid" accept="video/*" class="hidden">
+
+  <!-- pen FAB + blackboard dock -->
+  <button class="fab" id="fab" title="黑板 (P)">✏️<span class="ring"></span></button>
+  <div class="dock" id="dock">
+    <div class="dock-grip"></div>
+    <div class="dock-head">
+      <div class="t"><span class="pen">✏️</span>隨手黑板</div>
+      <div class="spacer" style="flex:1"></div>
+      <label class="switch" title="打字時即時投到大螢幕"><input type="checkbox" id="swLive" checked><span class="track"></span>即時投放</label>
+      <label class="switch" title="用 Claude 自動翻成英文"><input type="checkbox" id="swAuto" checked><span class="track"></span>自動翻譯</label>
+    </div>
+    <div class="wb-fields">
+      <div class="field">
+        <label>中文 · 投到大螢幕的字</label>
+        <textarea class="zh" id="wbZh" placeholder="打你想補充的字…（會立刻出現在大螢幕）" rows="3"></textarea>
+      </div>
+      <div class="field">
+        <label>English · 下方小字翻譯 <span class="st" id="trStatus"></span></label>
+        <textarea class="en" id="wbEn" placeholder="自動翻譯會出現在這，可直接改。" rows="3"></textarea>
+      </div>
+    </div>
+    <div class="dock-actions">
+      <button class="wbtn pri" id="wbShow">投到大螢幕</button>
+      <button class="wbtn" id="wbRetrans">↻ 重新翻譯</button>
+      <button class="wbtn sm" id="wbClear">清空</button>
+      <div class="flexsp"></div>
+      <button class="wbtn sm" id="wbClose">收合 ▾</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ PROJECTION ============ -->
+<div id="projection" class="hidden">
+  <div class="pwait" id="pwait">
+    <div class="ic">📺</div>
+    <h2>等待控制台…</h2>
+    <p>請在「控制台」視窗上傳簡報，這裡會自動顯示。<span class="en">Waiting for the presenter console.</span></p>
+  </div>
+  <img class="pslide hidden" id="pslide" alt="投影片">
+  <video class="pvid hidden" id="pvideo" playsinline preload="metadata"></video>
+  <div class="p-black hidden" id="pBlack"></div>
+  <div class="p-white hidden" id="pWhite"></div>
+  <div class="p-wb hidden" id="pWb"><div class="zh" id="pWbZh"></div><div class="en" id="pWbEn"></div></div>
+  <div class="p-pager" id="pPager">0 / 0</div>
+  <button class="pfs" id="pfsBtn">⤢ 全螢幕</button>
+  <div class="punlock hidden" id="punlock">🔊 點一下畫面開啟影片聲音</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+if (window.pdfjsLib) { pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; }
+
+/* ---------------- shared infra ---------------- */
+const CH = "lecture-blackboard-sync";
+const bc = ("BroadcastChannel" in window) ? new BroadcastChannel(CH) : null;
+function send(msg){ try{ bc && bc.postMessage(msg); }catch(e){} }
+
+const DB_NAME="lectureDeckDB", STORE="decks";
+function openDB(){return new Promise((res,rej)=>{try{const r=indexedDB.open(DB_NAME,1);
+  r.onupgradeneeded=()=>{const d=r.result;if(!d.objectStoreNames.contains(STORE))d.createObjectStore(STORE);};
+  r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);}catch(e){rej(e);}});}
+async function idbPut(key,val){try{const db=await openDB();return new Promise((res,rej)=>{const tx=db.transaction(STORE,"readwrite");tx.objectStore(STORE).put(val,key);tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);});}catch(e){console.warn("idb put",e);}}
+async function idbGet(key){try{const db=await openDB();return new Promise((res,rej)=>{const tx=db.transaction(STORE,"readonly");const rq=tx.objectStore(STORE).get(key);rq.onsuccess=()=>res(rq.result||null);rq.onerror=()=>rej(rq.error);});}catch(e){console.warn("idb get",e);return null;}}
+async function idbDel(key){try{const db=await openDB();return new Promise((res)=>{const tx=db.transaction(STORE,"readwrite");tx.objectStore(STORE).delete(key);tx.oncomplete=()=>res();tx.onerror=()=>res();});}catch(e){}}
+
+function $(id){return document.getElementById(id);}
+function toast(t){const el=$("toast");el.textContent=t;el.classList.add("show");clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove("show"),1900);}
+function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
+function lsSet(k,v){try{localStorage.setItem(k,v);}catch(e){}}
+function fmt(s){ s=Math.max(0,Math.floor(s||0)); const m=Math.floor(s/60); return m+":"+String(s%60).padStart(2,"0"); }
+
+/* ---------------- role selection ---------------- */
+let ROLE=null;
+try{ROLE=sessionStorage.getItem("lwb_role");}catch(e){}
+function setRole(r){ROLE=r;try{sessionStorage.setItem("lwb_role",r);}catch(e){}
+  $("lobby").classList.add("hidden");
+  if(r==="controller"){$("controller").classList.remove("hidden");initController();}
+  else{$("projection").classList.remove("hidden");initProjection();}}
+$("pickCtrl").onclick=()=>setRole("controller");
+$("pickProj").onclick=()=>setRole("projection");
+if(ROLE){setRole(ROLE);}
+
+/* clock */
+setInterval(()=>{const c=$("clock");if(c){const d=new Date();c.textContent=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");}},1000);
+
+/* ======================================================= CONTROLLER ======================================================= */
+let images=[];           // current deck image dataURLs
+let videos={};           // index -> {name,dur}
+let claudeSample=null;   // translation
+const state={ slidesId:null, slideCount:0, index:0, screen:"slide", wb:{on:false, zh:"", en:""} };
+
+function initController(){
+  (async()=>{ try{ claudeSample = (window.claude&&claude.use)? await claude.use("sample") : null; }catch(e){ claudeSample=null; }
+    /* GitHub build: auto-translate uses web API fallback when Claude capability is absent */ })();
+
+  // restore last deck
+  (async()=>{ const last=lsGet("lwb_lastDeck"); if(last){ const rec=await idbGet(last); if(rec&&rec.images&&rec.images.length){ images=rec.images; videos=rec.videos||{}; state.slidesId=last; state.slideCount=images.length; state.index=Math.min(state.index,images.length-1); enterPlaying(); renderCtrl(); updateVidUI(); broadcast(); send({t:"deck",id:last,count:images.length}); } } })();
+
+  // upload wiring
+  const drop=$("drop");
+  const openPdf=()=>$("filePdf").click(), openImgs=()=>$("fileImgs").click(), openVid=()=>{ if(!images.length){toast("請先上傳簡報");return;} $("fileVid").click(); };
+  $("pickPdf").onclick=openPdf; $("pickImgs").onclick=openImgs;
+  $("upPdf").onclick=openPdf; $("upImgs").onclick=openImgs; $("upVid").onclick=openVid;
+  $("filePdf").onchange=e=>{const f=e.target.files[0];if(f)loadPdf(f);e.target.value="";};
+  $("fileImgs").onchange=e=>{const fs=[...e.target.files];if(fs.length)loadImages(fs);e.target.value="";};
+  $("fileVid").onchange=e=>{const f=e.target.files[0];if(f)attachVideo(f);e.target.value="";};
+  ["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("over");}));
+  ["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();if(ev==="dragleave"&&drop.contains(e.relatedTarget))return;drop.classList.remove("over");}));
+  drop.addEventListener("drop",e=>{const fs=[...(e.dataTransfer.files||[])];const pdf=fs.find(f=>f.type==="application/pdf"||/\.pdf$/i.test(f.name));const imgs=fs.filter(f=>/^image\//.test(f.type));if(pdf)loadPdf(pdf);else if(imgs.length)loadImages(imgs);else toast("只支援 PDF 或圖片");});
+
+  $("ctrlReset").onclick=()=>{ try{sessionStorage.removeItem("lwb_role");}catch(e){} location.reload(); };
+
+  // transport
+  $("prevBtn").onclick=()=>go(state.index-1);
+  $("nextBtn").onclick=()=>go(state.index+1);
+  $("screenSeg").querySelectorAll("button").forEach(b=>b.onclick=()=>setScreen(b.dataset.s));
+
+  // video bar
+  $("vPlay").onclick=toggleVid;
+  $("vRestart").onclick=()=>{ sendVid("seek",{time:0}); sendVid("play"); vidPlaying=true; updateVPlayBtn(); };
+  $("vSeek").addEventListener("input",()=>{ vSeekDrag=true; const dur=(videos[state.index]&&videos[state.index].dur)||0; $("vTime").textContent=fmt($("vSeek").value/1000*dur)+" / "+fmt(dur); });
+  $("vSeek").addEventListener("change",()=>{ const dur=(videos[state.index]&&videos[state.index].dur)||0; sendVid("seek",{time:$("vSeek").value/1000*dur}); vSeekDrag=false; });
+  $("vRemove").onclick=removeVideo;
+
+  // blackboard
+  $("fab").onclick=toggleDock;
+  $("wbClose").onclick=()=>setDock(false);
+  const zh=$("wbZh"), en=$("wbEn");
+  zh.addEventListener("input",onZh);
+  en.addEventListener("input",()=>{ enEdited=true; if(state.wb.on&&$("swLive").checked){ pushWb(); } });
+  $("wbShow").onclick=()=>{ state.wb.on=!state.wb.on; pushWb(); updateShowBtn(); };
+  $("wbRetrans").onclick=()=>{ enEdited=false; doTranslate(true); };
+  $("wbClear").onclick=()=>{ zh.value="";en.value="";enEdited=false;state.wb.zh="";state.wb.en="";state.wb.on=false;pushWb();updateShowBtn();$("trStatus").textContent="";zh.focus(); };
+  $("swLive").addEventListener("change",()=>{ if($("swLive").checked&&(zh.value.trim()||en.value.trim())){ state.wb.on=true; pushWb(); updateShowBtn(); } });
+
+  send({t:"hello",role:"controller"});
+  setInterval(()=>send({t:"hello",role:"controller"}),2000);
+  document.addEventListener("keydown",onKey);
+}
+
+function enterUpload(){ $("drop").classList.remove("hidden"); $("previewWrap").classList.add("hidden"); $("side").classList.add("hidden"); }
+function enterPlaying(){ $("drop").classList.add("hidden"); $("previewWrap").classList.remove("hidden"); $("side").classList.remove("hidden"); }
+
+/* ---- loading decks ---- */
+function showLoading(title){ let el=$("loadingOv"); if(!el){ el=document.createElement("div"); el.className="loading"; el.id="loadingOv"; el.innerHTML='<div class="lt" id="loadTitle"></div><div class="bar"><i id="loadBar"></i></div><div class="ls" id="loadStat"></div>'; document.body.appendChild(el);} el.style.display="flex"; $("loadTitle").textContent=title; $("loadBar").style.width="0%"; $("loadStat").textContent=""; }
+function setLoading(done,total){ $("loadBar").style.width=Math.round(done/total*100)+"%"; $("loadStat").textContent=done+" / "+total; }
+function hideLoading(){ const el=$("loadingOv"); if(el)el.style.display="none"; }
+
+async function loadPdf(file){
+  showLoading("正在處理 PDF…");
+  try{
+    const buf=await file.arrayBuffer();
+    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+    const total=pdf.numPages; const out=[];
+    for(let i=1;i<=total;i++){
+      const page=await pdf.getPage(i);
+      const vp0=page.getViewport({scale:1});
+      const targetW=Math.min(1920, Math.max(1280, vp0.width*2));
+      const scale=targetW/vp0.width;
+      const vp=page.getViewport({scale});
+      const cv=document.createElement("canvas"); cv.width=Math.round(vp.width); cv.height=Math.round(vp.height);
+      const cx=cv.getContext("2d",{alpha:false});
+      await page.render({canvasContext:cx,viewport:vp}).promise;
+      out.push(cv.toDataURL("image/jpeg",0.86));
+      setLoading(i,total); await new Promise(r=>setTimeout(r,0));
+    }
+    await commitDeck(out);
+  }catch(e){ console.error(e); toast("PDF 讀取失敗，試試匯出成圖片"); }
+  hideLoading();
+}
+async function loadImages(files){
+  showLoading("正在載入圖片…");
+  files.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true,sensitivity:"base"}));
+  const out=[]; const total=files.length;
+  for(let i=0;i<total;i++){ try{ out.push(await fileToScaledJpeg(files[i])); }catch(e){ console.warn(e); } setLoading(i+1,total); await new Promise(r=>setTimeout(r,0)); }
+  if(out.length) await commitDeck(out); else toast("圖片載入失敗");
+  hideLoading();
+}
+function fileToScaledJpeg(file){ return new Promise((res,rej)=>{ const img=new Image(); const url=URL.createObjectURL(file);
+  img.onload=()=>{ const maxW=1920; const sc=Math.min(1,maxW/img.width); const w=Math.round(img.width*sc),h=Math.round(img.height*sc);
+    const cv=document.createElement("canvas");cv.width=w;cv.height=h;const cx=cv.getContext("2d",{alpha:false});cx.fillStyle="#000";cx.fillRect(0,0,w,h);cx.drawImage(img,0,0,w,h);
+    URL.revokeObjectURL(url); res(cv.toDataURL("image/jpeg",0.88)); };
+  img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error("img"));}; img.src=url; }); }
+
+async function commitDeck(imgArr){
+  images=imgArr; videos={};
+  const id=Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+  state.slidesId=id; state.slideCount=images.length; state.index=0; state.screen="slide"; state.wb={on:false,zh:"",en:""};
+  await idbPut(id,{count:images.length,images,videos:{}}); lsSet("lwb_lastDeck",id);
+  enterPlaying(); renderCtrl(); updateVidUI();
+  send({t:"deck",id,count:images.length});
+  broadcast();
+  toast(images.length+" 張投影片已就緒");
+}
+async function persistDeck(){ if(!state.slidesId)return; await idbPut(state.slidesId,{count:images.length,images,videos}); }
+
+/* ---- video attach / control ---- */
+let vidPlaying=false, vSeekDrag=false;
+function vkey(idx){ return "vid:"+state.slidesId+":"+idx; }
+async function attachVideo(file){
+  const idx=state.index;
+  showLoading("正在載入影片…"); $("loadBar").style.width="40%"; $("loadStat").textContent=file.name;
+  try{
+    await idbPut(vkey(idx), file);
+    const dur=await probeDuration(file);
+    videos[idx]={name:file.name, dur:dur||0};
+    await persistDeck();
+    $("loadBar").style.width="100%";
+    updateVidUI(); renderCtrl();
+    sendVid("load",{key:vkey(idx)});
+    toast("影片已掛到第 "+(idx+1)+" 頁");
+  }catch(e){ console.warn(e); toast("影片載入失敗"); }
+  hideLoading();
+}
+function probeDuration(file){ return new Promise(res=>{ try{ const v=document.createElement("video"); v.preload="metadata"; const u=URL.createObjectURL(file);
+  v.onloadedmetadata=()=>{ const d=v.duration; URL.revokeObjectURL(u); res(isFinite(d)?d:0); }; v.onerror=()=>{URL.revokeObjectURL(u);res(0);}; v.src=u; }catch(e){res(0);} }); }
+async function removeVideo(){
+  const idx=state.index; if(!videos[idx])return;
+  stopVid();
+  await idbDel(vkey(idx)); delete videos[idx]; await persistDeck();
+  updateVidUI(); renderCtrl(); toast("已移除這頁的影片");
+}
+function toggleVid(){ if(vidPlaying){ sendVid("pause"); vidPlaying=false; } else { sendVid("play",{key:vkey(state.index)}); vidPlaying=true; } updateVPlayBtn(); }
+function stopVid(){ if(vidPlaying||true){ sendVid("stop"); } vidPlaying=false; updateVPlayBtn(); }
+function sendVid(action,extra){ send(Object.assign({t:"video",action,index:state.index},extra||{})); }
+function updateVPlayBtn(){ const b=$("vPlay"); b.textContent=vidPlaying?"⏸":"▶"; b.classList.toggle("play",!vidPlaying); }
+function updateVidUI(){
+  const has=!!videos[state.index];
+  $("vidbar").classList.toggle("hidden",!has);
+  $("curVtag").classList.toggle("hidden",!has);
+  $("upVid").textContent=has?"🎬 換這頁的影片":"🎬 這頁加影片";
+  if(has){ $("vName").textContent=videos[state.index].name||"影片"; const dur=videos[state.index].dur||0; $("vTime").textContent="0:00 / "+fmt(dur); if(!vidPlaying){$("vSeek").value=0;} }
+  // thumb badges
+  const th=$("thumbs");
+  [...th.children].forEach((c,i)=>{ let m=c.querySelector(".vmark"); if(videos[i]){ if(!m){ m=document.createElement("span"); m.className="vmark"; m.textContent="🎬"; c.appendChild(m);} } else if(m){ m.remove(); } });
+}
+
+/* ---- navigation / screen ---- */
+function go(i){ if(!images.length)return; i=Math.max(0,Math.min(images.length-1,i)); if(i===state.index&&state.screen==="slide")return; if(vidPlaying)stopVid(); state.index=i; if(state.screen!=="slide")state.screen="slide"; renderCtrl(); updateVidUI(); broadcast(); if(videos[i]) sendVid("load",{key:vkey(i)}); }
+function setScreen(s){ state.screen=(state.screen===s&&s!=="slide")?"slide":s; renderCtrl(); broadcast(); }
+
+function renderCtrl(){
+  $("curNo").textContent=state.slideCount?state.index+1:0;
+  $("totNo").textContent=state.slideCount;
+  $("thumbCount").textContent=state.slideCount;
+  $("prevBtn").disabled=state.index<=0;
+  $("nextBtn").disabled=state.index>=state.slideCount-1;
+  $("curImg").src=images[state.index]||"";
+  $("curBlack").classList.toggle("hidden",state.screen!=="black");
+  $("curWhite").classList.toggle("hidden",state.screen!=="white");
+  const nx=images[state.index+1];
+  if(nx){$("nextImg").src=nx;$("nextImg").classList.remove("hidden");$("nextNone").classList.add("hidden");}
+  else{$("nextImg").classList.add("hidden");$("nextNone").classList.remove("hidden");}
+  $("screenSeg").querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.s===state.screen));
+  const show=state.wb.on&&(state.wb.zh.trim()||state.wb.en.trim());
+  $("curWb").classList.toggle("hidden",!show);
+  $("curScrim").classList.toggle("hidden",!show);
+  $("curWbZh").textContent=state.wb.zh;
+  $("curWbEn").textContent=state.wb.en;
+  const th=$("thumbs");
+  if(th.childElementCount!==state.slideCount){
+    th.innerHTML="";
+    images.forEach((src,i)=>{ const d=document.createElement("div"); d.className="thumb"; d.innerHTML='<span class="n">'+(i+1)+'</span>'; const im=document.createElement("img"); im.src=src; im.loading="lazy"; d.appendChild(im); d.onclick=()=>go(i); th.appendChild(d); });
+  }
+  [...th.children].forEach((c,i)=>c.classList.toggle("cur",i===state.index));
+  const curThumb=th.children[state.index]; if(curThumb)curThumb.scrollIntoView({block:"nearest"});
+}
+
+function broadcast(){ send({t:"state",s:JSON.parse(JSON.stringify(state))}); }
+
+/* ---- blackboard ---- */
+let dockOpen=false, enEdited=false, trTimer=null;
+function setDock(v){ dockOpen=v; $("dock").classList.toggle("open",v); $("fab").classList.toggle("active",v); if(v){setTimeout(()=>$("wbZh").focus(),250);} }
+function toggleDock(){ setDock(!dockOpen); }
+function updateShowBtn(){ const b=$("wbShow"); b.classList.toggle("on",state.wb.on); b.textContent=state.wb.on?"■ 收回":"投到大螢幕"; $("fab").classList.toggle("pushing",state.wb.on); }
+function pushWb(){ state.wb.zh=$("wbZh").value; state.wb.en=$("wbEn").value; renderCtrl(); broadcast(); }
+function onZh(){
+  enEdited=false;
+  if($("swLive").checked){ state.wb.on=!!($("wbZh").value.trim()||$("wbEn").value.trim()); updateShowBtn(); }
+  pushWb();
+  if($("swAuto").checked){ clearTimeout(trTimer); const txt=$("wbZh").value.trim(); if(!txt){$("wbEn").value="";$("trStatus").textContent="";pushWb();return;} $("trStatus").textContent="翻譯中…"; trTimer=setTimeout(()=>doTranslate(false),650); }
+}
+const GLOSSARY="人才→Tao Practitioner; 道→Tao; 一貫道→Yiguandao / the Tao; 點傳師→Tao Master; 前賢→senior practitioner; 後學→student/junior; 修道→Tao cultivation; 辦道→Tao work; 法會→Tao seminar; 愿→vow; 德→virtue; 心性→heart-nature.";
+async function webTranslate(txt){
+  const u="https://api.mymemory.translated.net/get?q="+encodeURIComponent(txt)+"&langpair=zh-TW|en";
+  const r=await fetch(u); const j=await r.json();
+  return ((j&&j.responseData&&j.responseData.translatedText)||"").trim();
+}
+async function doTranslate(force){
+  const txt=$("wbZh").value.trim(); if(!txt){$("wbEn").value="";$("trStatus").textContent="";pushWb();return;}
+  if(enEdited&&!force)return;
+  $("trStatus").textContent="翻譯中…";
+  try{
+    let out="";
+    if(claudeSample){
+      const prompt="You translate a Chinese lecture note into one natural, concise English on-screen caption. Audience: international audience at a spiritual / community talk. Keep it short and plain. Use these preferred term translations where they appear: "+GLOSSARY+"\nOutput ONLY the English translation text — no quotes, no pinyin, no notes.\n\n中文：「"+txt+"」";
+      const r=await claudeSample(prompt,{modelTier:"quick",cache:true});
+      out=(r&&r.text?r.text:"").trim();
+    } else {
+      out=await webTranslate(txt);
+    }
+    out=out.replace(/^["'「」]+|["'「」]+$/g,"");
+    if(out&&(!enEdited||force)){ $("wbEn").value=out; pushWb(); }
+    $("trStatus").textContent="";
+  }catch(e){ console.warn("translate",e); $("trStatus").textContent="翻譯失敗，可手動輸入"; }
+}
+
+/* ---- keyboard ---- */
+function onKey(e){
+  const tag=(document.activeElement&&document.activeElement.tagName)||"";
+  if(tag==="TEXTAREA"||tag==="INPUT"){ if(e.key==="Escape")document.activeElement.blur(); return; }
+  switch(e.key){
+    case"ArrowRight":case"PageDown":case" ":e.preventDefault();go(state.index+1);break;
+    case"ArrowLeft":case"PageUp":e.preventDefault();go(state.index-1);break;
+    case"Home":go(0);break; case"End":go(state.slideCount-1);break;
+    case"b":case"B":setScreen("black");break;
+    case"w":case"W":setScreen("white");break;
+    case"p":case"P":toggleDock();break;
+  }
+}
+
+/* ---- controller message handling ---- */
+let projLastSeen=0;
+if(bc){ bc.addEventListener("message",ev=>{ const m=ev.data; if(!m||ROLE!=="controller")return;
+  if(m.t==="hello"&&m.role==="projection"){ projLastSeen=Date.now(); if(state.slidesId){ send({t:"deck",id:state.slidesId,count:state.slideCount}); broadcast(); if(videos[state.index])sendVid("load",{key:vkey(state.index)}); } }
+  if(m.t==="request"){ if(state.slidesId)send({t:"deck",id:state.slidesId,count:state.slideCount}); broadcast(); }
+  if(m.t==="vtime"){ const v=videos[state.index]; if(v&&m.duration){ v.dur=m.duration; } vidPlaying=m.playing; updateVPlayBtn();
+    if(!vSeekDrag){ const dur=m.duration||0; $("vSeek").value=dur?Math.round(m.time/dur*1000):0; $("vTime").textContent=fmt(m.time)+" / "+fmt(dur); }
+    if(m.ended){ vidPlaying=false; updateVPlayBtn(); }
+  }
+}); }
+setInterval(()=>{ if(ROLE!=="controller")return; const on=Date.now()-projLastSeen<5000; const p=$("connPill"); if(p){p.classList.toggle("live",on); $("connTxt").textContent=on?'投影已連線':'投影未連線';} },1000);
+
+/* ======================================================= PROJECTION ======================================================= */
+let pImages=[], pLoadedId=null, audioUnlocked=false, pVidUrl=null;
+function initProjection(){
+  (async()=>{ const last=lsGet("lwb_lastDeck"); if(last){ await loadDeckForProjection(last); } })();
+  send({t:"hello",role:"projection"});
+  send({t:"request"});
+  setInterval(()=>send({t:"hello",role:"projection"}),2000);
+
+  $("pfsBtn").onclick=e=>{ e.stopPropagation(); unlockAudio(); toggleFs(); };
+  const proj=$("projection");
+  proj.addEventListener("click",unlockAudio);
+  proj.addEventListener("dblclick",toggleFs);
+  $("punlock").onclick=e=>{ e.stopPropagation(); unlockAudio(); };
+  let curT=null; proj.addEventListener("mousemove",()=>{ proj.classList.remove("hidecur"); clearTimeout(curT); curT=setTimeout(()=>proj.classList.add("hidecur"),2600); });
+
+  const pv=$("pvideo");
+  const emit=()=>send({t:"vtime",time:pv.currentTime,duration:isFinite(pv.duration)?pv.duration:0,playing:!pv.paused,ended:pv.ended});
+  pv.addEventListener("timeupdate",emit);
+  pv.addEventListener("play",emit); pv.addEventListener("pause",emit);
+  pv.addEventListener("loadedmetadata",emit);
+  pv.addEventListener("ended",()=>send({t:"vtime",time:pv.currentTime,duration:pv.duration,playing:false,ended:true}));
+}
+function unlockAudio(){ audioUnlocked=true; $("punlock").classList.add("hidden"); const pv=$("pvideo"); if(pv&&!pv.paused&&pv.muted){ pv.muted=false; } }
+function toggleFs(){ const el=document.documentElement; if(!document.fullscreenElement){ (el.requestFullscreen||el.webkitRequestFullscreen||function(){}).call(el); } else { (document.exitFullscreen||document.webkitExitFullscreen||function(){}).call(document); } }
+
+async function loadDeckForProjection(id){
+  if(id===pLoadedId&&pImages.length)return true;
+  const rec=await idbGet(id);
+  if(rec&&rec.images&&rec.images.length){ pImages=rec.images; pLoadedId=id; return true; }
+  return false;
+}
+
+function applyProjState(s){
+  const ps=$("pslide"), pw=$("pwait");
+  if(pImages.length&&s.slideCount){
+    ps.src=pImages[s.index]||pImages[0]; ps.classList.remove("hidden"); pw.classList.add("hidden");
+    $("pPager").textContent=(s.index+1)+" / "+s.slideCount;
+  } else { ps.classList.add("hidden"); pw.classList.remove("hidden"); }
+  $("pBlack").classList.toggle("hidden",s.screen!=="black");
+  $("pWhite").classList.toggle("hidden",s.screen!=="white");
+  const show=s.wb&&s.wb.on&&(((s.wb.zh||"").trim())||((s.wb.en||"").trim()));
+  const wb=$("pWb");
+  wb.classList.toggle("hidden",!show);
+  if(show){ $("pWbZh").textContent=s.wb.zh||""; $("pWbEn").textContent=s.wb.en||""; wb.classList.toggle("center", s.screen!=="slide" || !pImages.length); }
+}
+
+async function playProjVideo(key){
+  const pv=$("pvideo");
+  try{ pv.play().then(()=>{ if(!audioUnlocked){ /* played but maybe muted */ } }).catch(err=>{ pv.muted=true; pv.play().catch(()=>{}); $("punlock").classList.remove("hidden"); }); }catch(e){}
+}
+async function loadProjVideo(key){
+  const blob=await idbGet(key);
+  const pv=$("pvideo");
+  if(!blob){ return false; }
+  if(pVidUrl){ try{URL.revokeObjectURL(pVidUrl);}catch(e){} }
+  pVidUrl=URL.createObjectURL(blob);
+  pv.src=pVidUrl; pv.load(); return true;
+}
+
+if(bc){ bc.addEventListener("message",async ev=>{ const m=ev.data; if(!m||ROLE!=="projection")return;
+  if(m.t==="deck"){ const ok=await loadDeckForProjection(m.id); if(ok&&_lastState)applyProjState(_lastState); }
+  if(m.t==="state"){ _lastState=m.s; if(m.s.slidesId&&m.s.slidesId!==pLoadedId){ await loadDeckForProjection(m.s.slidesId); } applyProjState(m.s); }
+  if(m.t==="video"){
+    const pv=$("pvideo");
+    if(m.action==="load"){ await loadProjVideo(m.key); }
+    else if(m.action==="play"){ pv.classList.remove("hidden"); if(!pv.src){ await loadProjVideo(m.key||("vid:"+(_lastState&&_lastState.slidesId)+":"+m.index)); } if(pv.ended){ try{pv.currentTime=0;}catch(e){} } if(audioUnlocked)pv.muted=false; playProjVideo(); }
+    else if(m.action==="pause"){ pv.pause(); }
+    else if(m.action==="seek"){ try{ pv.currentTime=m.time||0; }catch(e){} }
+    else if(m.action==="stop"){ pv.pause(); pv.classList.add("hidden"); if(_lastState)applyProjState(_lastState); }
+  }
+}); }
+let _lastState=null;
+</script>
+
+</body>
+</html>
