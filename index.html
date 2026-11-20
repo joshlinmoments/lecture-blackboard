@@ -238,7 +238,7 @@ textarea.en{font-family:var(--en);color:var(--chalk)}
 <div id="lobby">
   <div class="lobby-badge">Presenter · Blackboard</div>
   <div class="lobby-title">簡報黑板播放台</div>
-  <div class="lobby-sub">雙螢幕簡報系統。播放中按右下角的筆，<b>隨手打字就投到大螢幕</b>，下方自動配上英文翻譯；簡報裡的影片也能掛頁播放。<br>先選這個視窗要當什麼：</div>
+  <div class="lobby-sub">雙螢幕簡報系統。播放中按右下角的筆，<b>隨手打字就投到大螢幕</b>，下方自動配上英文翻譯；簡報裡的影片也能掛頁播放。<br>點下面兩個按鈕，會各自開一個新視窗：</div>
   <div class="role-grid">
     <button class="role-card" id="pickCtrl">
       <div class="ic">🎛️</div>
@@ -256,8 +256,8 @@ textarea.en{font-family:var(--en);color:var(--chalk)}
   <div class="lobby-steps">
     <div class="h">怎麼用（同一台電腦接投影機）</div>
     <ol>
-      <li>在<b>這個連結</b>開兩個瀏覽器視窗。</li>
-      <li>一個選「<b>控制台</b>」留在筆電；另一個選「<b>投影畫面</b>」拖到投影機、按全螢幕。</li>
+      <li>按下面「<b>控制台</b>」和「<b>投影畫面</b>」，各自開一個新視窗（若被瀏覽器擋彈窗，請允許）。</li>
+      <li>「控制台」留在筆電；「<b>投影畫面</b>」那個視窗拖到投影機、按全螢幕。</li>
       <li>在控制台<b>上傳簡報</b>（PDF 或圖片）；有影片的那幾頁再<b>掛上影片檔</b>。</li>
       <li>講到一半要補充：按右下角的<b>筆</b>，打字即時投到大螢幕。</li>
     </ol>
@@ -429,9 +429,20 @@ function setRole(r){ROLE=r;try{sessionStorage.setItem("lwb_role",r);}catch(e){}
   $("lobby").classList.add("hidden");
   if(r==="controller"){$("controller").classList.remove("hidden");initController();}
   else{$("projection").classList.remove("hidden");initProjection();}}
-$("pickCtrl").onclick=()=>setRole("controller");
-$("pickProj").onclick=()=>setRole("projection");
-if(ROLE){setRole(ROLE);}
+function openRole(role){
+  const base=location.href.split("#")[0].split("?")[0];
+  const url=base+"?role="+role+"#"+role;
+  let w=null; try{ w=window.open(url,"lwb_"+role); }catch(e){}
+  if(w){ try{w.focus();}catch(e){} } else { setRole(role); }   // popup blocked -> use this window
+}
+function wantedRole(){
+  try{ const p=new URLSearchParams(location.search).get("role"); if(p==="controller"||p==="projection")return p; }catch(e){}
+  const h=(location.hash||"").replace("#",""); return (h==="controller"||h==="projection")?h:null;
+}
+$("pickCtrl").onclick=()=>openRole("controller");
+$("pickProj").onclick=()=>openRole("projection");
+const _want=wantedRole();
+if(_want){setRole(_want);} else if(ROLE){setRole(ROLE);}
 
 /* clock */
 setInterval(()=>{const c=$("clock");if(c){const d=new Date();c.textContent=String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");}},1000);
